@@ -1,4 +1,4 @@
-import { decimalToCents, formatCents } from "@/lib/money";
+import { centsToDecimal, decimalToCents, formatCents, invoiceItemsTotalCents } from "@/lib/money";
 import type { PayPalGateway } from "@/lib/paypal/gateway";
 import {
   PLACEHOLDER_RECIPIENT_EMAIL,
@@ -58,12 +58,7 @@ export function createMockGateway(): PayPalGateway & { calls: string[] } {
 
   function amountWarning(params: PayPalInvoiceParams, paypalAmount: string): string | null {
     const reported = decimalToCents(paypalAmount);
-    const billed = params.items.reduce((sum, item) => {
-      const unit = decimalToCents(item.unit_amount.value);
-      const quantity = Number(item.quantity);
-      if (unit === null || !Number.isFinite(quantity)) return sum;
-      return sum + Math.round(unit * quantity);
-    }, 0);
+    const billed = invoiceItemsTotalCents(params.items);
     if (reported === null || reported !== billed) {
       return `PayPal reported ${paypalAmount}, which does not match the ledger total ${formatCents(billed)}.`;
     }
@@ -74,12 +69,10 @@ export function createMockGateway(): PayPalGateway & { calls: string[] } {
     mode: "mock",
     calls,
     async create(params) {
+      const totalCents = invoiceItemsTotalCents(params.items);
+      const paypalAmount = centsToDecimal(totalCents);
       calls.push("create_invoice");
       const id = `MOCK-INV-${sequence++}`;
-      const totalCents = params.items.reduce((sum, item) => {
-        return sum + Math.round(decimalToCents(item.unit_amount.value)! * Number(item.quantity));
-      }, 0);
-      const paypalAmount = (totalCents / 100).toFixed(2);
       const snapshot: PayPalSnapshot = {
         mode: "mock",
         id,
@@ -95,14 +88,12 @@ export function createMockGateway(): PayPalGateway & { calls: string[] } {
       return snapshot;
     },
     async update(current, params, notify) {
-      calls.push(`update_invoicing:${notify ? "notify" : "silent"}`);
       if (!isDraftStatus(current.status) && !isSentStatus(current.status)) {
         throw new Error(`Mock PayPal cannot update an invoice in status ${current.status}.`);
       }
-      const totalCents = params.items.reduce((sum, item) => {
-        return sum + Math.round(decimalToCents(item.unit_amount.value)! * Number(item.quantity));
-      }, 0);
-      const paypalAmount = (totalCents / 100).toFixed(2);
+      const totalCents = invoiceItemsTotalCents(params.items);
+      const paypalAmount = centsToDecimal(totalCents);
+      calls.push(`update_invoicing:${notify ? "notify" : "silent"}`);
       return {
         ...current,
         invoiceNumber: params.invoice_number,

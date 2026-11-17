@@ -1,4 +1,4 @@
-import { decimalToCents, formatCents } from "@/lib/money";
+import { decimalToCents, formatCents, invoiceItemsTotalCents } from "@/lib/money";
 import type { PayPalGateway } from "@/lib/paypal/gateway";
 import {
   isDraftStatus,
@@ -72,14 +72,7 @@ async function callTool(name: string, args: unknown): Promise<unknown> {
 }
 
 function billedCents(params: PayPalInvoiceParams): number {
-  return params.items.reduce((sum, item) => {
-    const unit = decimalToCents(item.unit_amount.value);
-    const quantity = Number(item.quantity);
-    if (unit === null || !Number.isFinite(quantity)) {
-      throw new Error(`PayPal item ${item.name} has an amount the ledger cannot read.`);
-    }
-    return sum + Math.round(unit * quantity);
-  }, 0);
+  return invoiceItemsTotalCents(params.items);
 }
 
 function amountWarning(totalCents: number, paypalAmount: string | undefined): string | null {

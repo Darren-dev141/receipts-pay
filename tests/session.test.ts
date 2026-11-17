@@ -1,4 +1,4 @@
-import { mkdtempSync } from "node:fs";
+import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
@@ -6,7 +6,7 @@ import { STAMP_FACT_ID } from "@/lib/ledger/demo-case";
 import { DRAFT_TOTAL_CENTS, REVISED_TOTAL_CENTS } from "@/lib/ledger/demo-case";
 import { paypalDecimal } from "@/lib/invoice/plan";
 import { toPayPalInvoiceParams, readPaypalInvoice } from "@/lib/paypal/invoice-body";
-import { decimalToCents } from "@/lib/money";
+import { invoiceItemsTotalCents } from "@/lib/money";
 import { createMockGateway, resolvePaypalMode } from "@/lib/paypal/mode";
 import {
   SessionError,
@@ -146,9 +146,7 @@ describe("agent session", () => {
     expect(params.invoice_date).toBe("2026-11-10");
     expect(params.primary_recipients[0].billing_info.email_address).toBe("buyer@northline.test");
     expect(params.invoicer_business_name).toBe("Harbor Fieldwork");
-    const total = params.items.reduce((sum, item) => {
-      return sum + Math.round(decimalToCents(item.unit_amount.value)! * Number(item.quantity));
-    }, 0);
+    const total = invoiceItemsTotalCents(params.items);
     expect(total).toBe(drafted.invoice?.totalCents);
     expect(params.items[0].unit_amount.value).toBe(paypalDecimal(2_500));
     expect(params.items[0].quantity).toBe("5");
@@ -189,6 +187,35 @@ describe("paypal mode", () => {
         method: "GET",
       }),
     ).toMatchObject({ id: "INV2-TEST-ID" });
+  });
+
+  it("does not reset a garbage session.json", async () => {
+    const directory = mkdtempSync(path.join(tmpdir(), "receipts-pay-"));
+    const file = path.join(directory, "session.json");
+    const garbage = "{not json";
+    writeFileSync(file, garbage);
+    const { deps, gateway } = harness(createFileStore(file));
+    await expect(loadSession(deps)).rejects.toThrow(/corrupt/i);
+    expect(readFileSync(file, "utf8")).toBe(garbage);
+    expect(gateway.calls).toEqual([]);
+  });
+
+  it("does not reset a session.json that is not a session", async () => {
+    const directory = mkdtempSync(path.join(tmpdir(), "receipts-pay-"));
+    const file = path.join(directory, "session.json");
+    writeFileSync(file, "{}");
+    const { deps } = harness(createFileStore(file));
+    await expect(loadSession(deps)).rejects.toThrow(/corrupt/i);
+    expect(readFileSync(file, "utf8")).toBe("{}");
+  });
+
+  it("starts fresh when session.json is missing", async () => {
+    const directory = mkdtempSync(path.join(tmpdir(), "receipts-pay-"));
+    const file = path.join(directory, "session.json");
+    const { deps } = harness(createFileStore(file));
+    const session = await loadSession(deps);
+    expect(session.phase).toBe("ready");
+    expect(createFileStore(file).read()?.phase).toBe("ready");
   });
 
   it("round-trips the session file", async () => {
